@@ -29,7 +29,7 @@ fi
 # independent CDNs; it is only a fallback because a branch ref can be cached
 # there for up to ~12h, while raw.githubusercontent is always current.
 # ============================================
-SCRIPT_REPO="papaaltay-sokol2007"
+SCRIPT_REPO="papaaltay-sokol2007/remnawave-scripts"
 SCRIPT_REF="main"
 SCRIPT_FILE="remnawave.sh"
 SCRIPT_URL="https://raw.githubusercontent.com/${SCRIPT_REPO}/${SCRIPT_REF}/${SCRIPT_FILE}"
