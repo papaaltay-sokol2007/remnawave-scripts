@@ -16,9 +16,10 @@ prompt_input() {
     local prompt="$1"
     local var_name="$2"
     local default="$3"
+    local input=""
     echo -ne "${prompt} [${default}]: "
-    read input
-    eval "$var_name=\"${input:-$default}\""
+    read -r input
+    printf -v "$var_name" '%s' "${input:-$default}"
 }
 
 echo -e "${YELLOW}📍 Specify the directory where to restore the backup:${NC}"
@@ -98,12 +99,23 @@ if [ -f "$RESTORE_PATH/docker-compose.yml" ]; then
 
     if [ -f "$RESTORE_PATH/.env" ]; then
         echo -e "${GREEN}✔ Found .env file, loading database credentials...${NC}"
-        while IFS='=' read -r key value; do
+        while IFS='=' read -r key value || [ -n "$key" ]; do
             if [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]]; then
                 continue
             fi
-            key=$(echo "$key" | tr -d '[:space:]')
-            value=$(echo "$value" | tr -d '[:space:]')
+            key="${key#"${key%%[![:space:]]*}"}"
+            key="${key%"${key##*[![:space:]]}"}"
+            if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+                continue
+            fi
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            value="${value%$'\r'}"
+            if [[ "$value" =~ ^"(.*)"$ ]]; then
+                value="${BASH_REMATCH[1]}"
+            elif [[ "$value" =~ ^'(.*)'$ ]]; then
+                value="${BASH_REMATCH[1]}"
+            fi
             export "$key=$value"
         done < "$RESTORE_PATH/.env"
     else

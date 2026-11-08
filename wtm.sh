@@ -44,8 +44,9 @@ if [ $# -gt 0 ]; then
     shift
 fi
 
-# Parse arguments
+# Parse arguments (flags in any order, preserving positional arguments)
 FORCE_MODE=false
+POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do  
     key="$1"  
     case $key in  
@@ -54,11 +55,8 @@ while [[ $# -gt 0 ]]; do
             shift
         ;;
         --license|--license-key)
-            # WARP+ license key for install-warp. `shift`-then-read avoids the
-            # `shift 2` trap when the flag is the last arg (would re-loop forever);
-            # the guarded second shift avoids a stderr warning when no value follows.
             shift
-            WARP_LICENSE_KEY="$1"
+            WARP_LICENSE_KEY="${1:-}"
             [ $# -gt 0 ] && shift
         ;;
         --license=*|--license-key=*)
@@ -66,10 +64,8 @@ while [[ $# -gt 0 ]]; do
             shift
         ;;
         --dns-port)
-            # Tor DNSPort for install-tor. Same shift-then-read pattern as
-            # --license so a trailing flag cannot spin the loop forever.
             shift
-            TOR_DNS_PORT="$1"
+            TOR_DNS_PORT="${1:-}"
             [ $# -gt 0 ] && shift
         ;;
         --dns-port=*)
@@ -80,11 +76,17 @@ while [[ $# -gt 0 ]]; do
             COMMAND="help"
             shift
         ;;
+        -v|--version)
+            COMMAND="version"
+            shift
+        ;;
         *)
-            break
+            POSITIONAL_ARGS+=("$1")
+            shift
         ;;
     esac
 done
+set -- "${POSITIONAL_ARGS[@]}"
 
 # Map the documented --force/-f flag onto the variable the install gates read.
 # Without this, `wtm install-warp --force` silently performed a NON-force install.
@@ -2689,20 +2691,20 @@ show_system_info() {
     printf "${BOLD}                         SYSTEM INFO                          ${NC}\n"
     printf "${BLUE}═══════════════════════════════════════════════════════════════${NC}\n\n"
     
-    printf "${BOLD}${CYAN}OS:${NC} $(lsb_release -d 2>/dev/null | cut -f2 || uname -o)\n"
-    printf "${BOLD}${CYAN}Kernel:${NC} $(uname -r)\n"
-    printf "${BOLD}${CYAN}Arch:${NC} $(uname -m)\n"
-    printf "${BOLD}${CYAN}CPU:${NC} $(grep 'model name' /proc/cpuinfo | head -1 | cut -d: -f2 | sed 's/^ *//')\n"
-    printf "${BOLD}${CYAN}RAM:${NC} $(free -h | awk '/^Mem:/ {print $3"/"$2}')\n"
-    printf "${BOLD}${CYAN}Uptime:${NC} $(uptime -p 2>/dev/null || uptime)\n"
+    printf "${BOLD}${CYAN}OS:${NC} %s\n" "$(lsb_release -d 2>/dev/null | cut -f2 || uname -o)"
+    printf "${BOLD}${CYAN}Kernel:${NC} %s\n" "$(uname -r)"
+    printf "${BOLD}${CYAN}Arch:${NC} %s\n" "$(uname -m)"
+    printf "${BOLD}${CYAN}CPU:${NC} %s\n" "$(grep 'model name' /proc/cpuinfo | head -1 | cut -d: -f2 | sed 's/^ *//')"
+    printf "${BOLD}${CYAN}RAM:${NC} %s\n" "$(free -h | awk '/^Mem:/ {print $3"/"$2}')"
+    printf "${BOLD}${CYAN}Uptime:${NC} %s\n" "$(uptime -p 2>/dev/null || uptime)"
     
     if command -v iptables >/dev/null 2>&1; then
         local rules=$(iptables -L | wc -l)
-        printf "${BOLD}${CYAN}Firewall:${NC} $rules rules\n"
+        printf "${BOLD}${CYAN}Firewall:${NC} %s rules\n" "$rules"
     fi
     
-    local ip=$(curl -s4 ifconfig.me 2>/dev/null || echo "Unknown")
-    printf "${BOLD}${CYAN}Public IP:${NC} $ip\n"
+    local ip=$(curl -s4 --connect-timeout 3 --max-time 5 ifconfig.me 2>/dev/null || echo "Unknown")
+    printf "${BOLD}${CYAN}Public IP:${NC} %s\n" "$ip"
     
     printf "\n${DIM}Press Enter to continue...${NC}"
     read -r
@@ -3195,7 +3197,7 @@ show_xray_config_page() {
 
     if [ -f "$WARP_XRAY_FILE" ]; then
         printf "${YELLOW}A ready-to-use outbound with YOUR WARP keys was generated at:${NC}\n"
-        printf "${GREEN}  $WARP_XRAY_FILE${NC}\n\n"
+        printf "${GREEN}  %s${NC}\n\n" "$WARP_XRAY_FILE"
         printf "${DIM}Current contents (paste as one of your Xray outbounds):${NC}\n"
         printf "${GREEN}"
         cat "$WARP_XRAY_FILE"
@@ -3318,7 +3320,7 @@ EOF
         mkdir -p /etc/wireguard
         generate_warp_sockopt_outbound
     fi
-    printf "${YELLOW}Ready-to-use outbound at:${NC} ${GREEN}$WARP_SOCKOPT_FILE${NC}\n\n"
+    printf "${YELLOW}Ready-to-use outbound at:${NC} ${GREEN}%s${NC}\n\n" "$WARP_SOCKOPT_FILE"
     printf "${GREEN}"
     cat "$WARP_SOCKOPT_FILE"
     printf "${NC}\n\n"
@@ -3697,8 +3699,18 @@ uninstall_script_command() {
 
 # Основная функция - обновленная версия
 main() {
-    check_root
     setup_colors
+    case "${COMMAND:-}" in
+        help|--help|-h)
+            usage
+            return 0
+            ;;
+        version|--version|-v)
+            show_version
+            return 0
+            ;;
+    esac
+    check_root
     
     # Если есть аргументы командной строки, выполняем их
     if [ -n "$COMMAND" ]; then
@@ -3808,7 +3820,7 @@ main() {
                 regen_warp_xray_outbound
                 ;;
             warp-plus|warp-license)
-                apply_warp_plus "$1"
+                apply_warp_plus "${1:-${WARP_LICENSE_KEY:-}}"
                 ;;
             xray-examples)
                 show_xray_examples

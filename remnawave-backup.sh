@@ -16,9 +16,10 @@ prompt_input() {
     local prompt="$1"
     local var_name="$2"
     local default="$3"
+    local input=""
     echo -ne "${prompt} [${default}]: "
-    read input
-    eval "$var_name=\"${input:-$default}\""
+    read -r input
+    printf -v "$var_name" '%s' "${input:-$default}"
 }
 
 echo -e "${YELLOW}📍 Specify the path to docker-compose.yml for Remnawave:${NC}"
@@ -158,9 +159,9 @@ EOF
 
 if [ "$BACKUP_ENTIRE_FOLDER" = "true" ]; then
     cat << EOF >> "$BACKUP_SCRIPT"
-TEMP_ARCHIVE_DIR="/tmp/archive_\$(date +%Y%m%d_%H%M%S)"
-mkdir -p "\$TEMP_ARCHIVE_DIR"
+TEMP_ARCHIVE_DIR=\$(mktemp -d /tmp/archive_XXXXXXXXXX)
 cp -r "$COMPOSE_PATH/." "\$TEMP_ARCHIVE_DIR/"
+rm -rf "\$TEMP_ARCHIVE_DIR/backups" "\$TEMP_ARCHIVE_DIR"/backup_*.tar.gz "\$TEMP_ARCHIVE_DIR/telegram_response.json" 2>/dev/null || true
 mv "\$BACKUP_DIR/db_backup.sql" "\$TEMP_ARCHIVE_DIR/db_backup.sql"
 tar -czvf "\$ARCHIVE_NAME" -C "\$TEMP_ARCHIVE_DIR" .
 if [ \$? -ne 0 ]; then
@@ -200,12 +201,12 @@ MESSAGE=$(printf "🔔 Remnawave Backup\n📅 Date: %s\n📦 Archive contents:\n
 send_telegram() {
     local file="$1"
     local caption="$2"
-    local curl_cmd="curl"
-    [ -n "$TELEGRAM_BOT_PROXY" ] && curl_cmd="$curl_cmd --proxy \"$TELEGRAM_BOT_PROXY\""
-    curl_cmd="$curl_cmd -F chat_id=\"$TELEGRAM_CHAT_ID\""
-    [ -n "$TELEGRAM_TOPIC_ID" ] && curl_cmd="$curl_cmd -F message_thread_id=\"$TELEGRAM_TOPIC_ID\""
-    curl_cmd="$curl_cmd -F document=@\"$file\" -F \"caption=$caption\" \"https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendDocument\" -o telegram_response.json"
-    eval "$curl_cmd"
+    local -a curl_args=(-sS)
+    [ -n "$TELEGRAM_BOT_PROXY" ] && curl_args+=(--proxy "$TELEGRAM_BOT_PROXY")
+    curl_args+=(-F "chat_id=$TELEGRAM_CHAT_ID")
+    [ -n "$TELEGRAM_TOPIC_ID" ] && curl_args+=(-F "message_thread_id=$TELEGRAM_TOPIC_ID")
+    curl_args+=(-F "document=@$file" -F "caption=$caption" "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendDocument" -o telegram_response.json)
+    curl "${curl_args[@]}"
 }
 if [ "$ARCHIVE_SIZE" -gt "$MAX_SIZE_MB" ]; then
     echo "Archive size ($ARCHIVE_SIZE MB) exceeds $MAX_SIZE_MB MB, splitting into parts..."
@@ -243,7 +244,7 @@ rm "$ARCHIVE_NAME"
 rm telegram_response.json
 EOF
 
-chmod +x "$BACKUP_SCRIPT"
+chmod 700 "$BACKUP_SCRIPT"
 
 echo -e "${GREEN}====================================================${NC}"
 echo -e "${GREEN}   Backup script created successfully at: $BACKUP_SCRIPT${NC}"

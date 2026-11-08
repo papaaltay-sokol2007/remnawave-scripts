@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Runs every suite; exits non-zero if any suite fails.
-cd "$(dirname "$0")" || exit 1
+TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+cd "$TESTS_DIR" || exit 1
 rc=0
-for suite in test-*.sh; do
-    bash "$suite" || rc=1
+for suite in "$TESTS_DIR"/test-*.sh; do
+    "${BASH:-bash}" "$suite" || rc=1
     echo
 done
 if [ "$rc" -eq 0 ]; then

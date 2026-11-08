@@ -1,7 +1,8 @@
-#!/bin/bash
-# Version: 1.0.0
+#!/usr/bin/env bash
 # RemnaNode Xray-core Updater
 # Created by DigneZzZ
+# VERSION=1.0.0
+SCRIPT_VERSION="1.0.0"
 
 echo -e "\e[1m\e[33mOur community: https://gig.ovh\n\e[0m"
 sleep 2s
@@ -29,13 +30,15 @@ colorized_echo() {
     local style=${3:-0}
 
     case $color in
-        "red") printf "\e[${style};91m${text}\e[0m\n" ;;
-        "green") printf "\e[${style};92m${text}\e[0m\n" ;;
-        "yellow") printf "\e[${style};93m${text}\e[0m\n" ;;
-        "blue") printf "\e[${style};94m${text}\e[0m\n" ;;
-        "magenta") printf "\e[${style};95m${text}\e[0m\n" ;;
-        "cyan") printf "\e[${style};96m${text}\e[0m\n" ;;
-        *) echo "${text}" ;;
+        "red") printf "\e[%s;91m%s\e[0m\n" "$style" "$text" ;;
+        "green") printf "\e[%s;92m%s\e[0m\n" "$style" "$text" ;;
+        "yellow") printf "\e[%s;93m%s\e[0m\n" "$style" "$text" ;;
+        "blue") printf "\e[%s;94m%s\e[0m\n" "$style" "$text" ;;
+        "magenta") printf "\e[%s;95m%s\e[0m\n" "$style" "$text" ;;
+        "cyan") printf "\e[%s;96m%s\e[0m\n" "$style" "$text" ;;
+        "white") printf "\e[%s;97m%s\e[0m\n" "$style" "$text" ;;
+        "gray") printf "\e[%s;90m%s\e[0m\n" "$style" "$text" ;;
+        *) printf "%s\n" "$text" ;;
     esac
 }
 
@@ -84,7 +87,7 @@ find_remnanode_directory() {
         fi
     done
     
-    local found_dirs=$(find / -type d -name "*remna*" -exec test -f "{}/docker-compose.yml" \; -print 2>/dev/null)
+    local found_dirs=$(find /opt /var /root /home -maxdepth 3 -type d -name "*remna*" -exec test -f "{}/docker-compose.yml" \; -print 2>/dev/null)
     
     if [ -n "$found_dirs" ]; then
         local first_dir=$(echo "$found_dirs" | head -1)
@@ -349,10 +352,19 @@ get_xray_core() {
     colorized_echo blue "🚀 Starting installation"
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 60))\033[0m"
     
-    if ! dpkg -s unzip >/dev/null 2>&1; then
-        colorized_echo blue "📦 Installing required packages..."
-        apt update -qq >/dev/null 2>&1
-        apt install -y unzip >/dev/null 2>&1
+    if ! command -v unzip >/dev/null 2>&1; then
+        colorized_echo blue "📦 Installing required packages (unzip)..."
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update -qq >/dev/null 2>&1 && apt-get install -y unzip >/dev/null 2>&1
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y unzip >/dev/null 2>&1
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y unzip >/dev/null 2>&1
+        elif command -v apk >/dev/null 2>&1; then
+            apk add --no-cache unzip >/dev/null 2>&1
+        elif command -v pacman >/dev/null 2>&1; then
+            pacman -Sy --noconfirm unzip >/dev/null 2>&1
+        fi
         colorized_echo green "✅ Packages installed successfully"
     fi
     

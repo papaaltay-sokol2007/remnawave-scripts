@@ -26,8 +26,8 @@ load_node_function get_current_xray_core_version
 load_node_function main_menu
 load_node_function status_command
 
-SANDBOX=$(mktemp -d)
-trap 'rm -rf "$SANDBOX"' EXIT
+SANDBOX=$(make_exec_sandbox)
+trap 'rm -rf "$SANDBOX"; rmdir "$REPO_ROOT/tests/.tmp" 2>/dev/null || true' EXIT
 mkdir -p "$SANDBOX/app/dist"
 APP_NAME="custom-node"
 export APP_DIR="$SANDBOX"

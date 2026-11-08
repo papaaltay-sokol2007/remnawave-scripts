@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Version: 4.6.2
+# RemnaNode Management Script
+# VERSION=4.6.2
 set -e
 SCRIPT_VERSION="4.6.2"
 
@@ -220,8 +221,20 @@ while [[ $# -gt 0 ]]; do
             fi
         ;;
         --help|-h)
-            show_command_help "$COMMAND"
-            exit 0
+            if [[ "$COMMAND" == "up" || "$COMMAND" == "restart" || "$COMMAND" == "logs" ]]; then
+                break
+            fi
+            COMMAND="help"
+            shift
+            break
+        ;;
+        -n|--no-logs|--no-follow)
+            if [[ "$COMMAND" == "up" || "$COMMAND" == "restart" || "$COMMAND" == "logs" ]]; then
+                break
+            else
+                echo "Unknown argument: $key"
+                exit 1
+            fi
         ;;
         enable|disable|status|test)
             if [[ "$COMMAND" == "auto-restart" ]]; then
@@ -293,12 +306,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Fetch IP address from ipinfo.io API
-NODE_IP=$(curl -s -4 ifconfig.io)
-
-# If the IPv4 retrieval is empty, attempt to retrieve the IPv6 address
-if [ -z "$NODE_IP" ]; then
-    NODE_IP=$(curl -s -6 ifconfig.io)
+# Fetch IP address with timeouts and fallbacks (skip on help/version)
+if [[ -z "${NODE_IP:-}" && ! "$COMMAND" =~ ^(help|--help|-h|version|--version|-v)$ ]]; then
+    NODE_IP=$(curl -s -4 --connect-timeout 3 --max-time 5 ifconfig.io 2>/dev/null || \
+              curl -s -4 --connect-timeout 3 --max-time 5 icanhazip.com 2>/dev/null || \
+              curl -s -6 --connect-timeout 3 --max-time 5 ifconfig.io 2>/dev/null || \
+              hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
 fi
 
 if [[ "$COMMAND" == "install" || "$COMMAND" == "install-script" ]] && [ -z "$APP_NAME" ]; then
@@ -366,13 +379,15 @@ colorized_echo() {
     local style=${3:-0}  # Default style is normal
 
     case $color in
-        "red") printf "\e[${style};91m${text}\e[0m\n" ;;
-        "green") printf "\e[${style};92m${text}\e[0m\n" ;;
-        "yellow") printf "\e[${style};93m${text}\e[0m\n" ;;
-        "blue") printf "\e[${style};94m${text}\e[0m\n" ;;
-        "magenta") printf "\e[${style};95m${text}\e[0m\n" ;;
-        "cyan") printf "\e[${style};96m${text}\e[0m\n" ;;
-        *) echo "${text}" ;;
+        "red") printf "\e[%s;91m%s\e[0m\n" "$style" "$text" ;;
+        "green") printf "\e[%s;92m%s\e[0m\n" "$style" "$text" ;;
+        "yellow") printf "\e[%s;93m%s\e[0m\n" "$style" "$text" ;;
+        "blue") printf "\e[%s;94m%s\e[0m\n" "$style" "$text" ;;
+        "magenta") printf "\e[%s;95m%s\e[0m\n" "$style" "$text" ;;
+        "cyan") printf "\e[%s;96m%s\e[0m\n" "$style" "$text" ;;
+        "white") printf "\e[%s;97m%s\e[0m\n" "$style" "$text" ;;
+        "gray") printf "\e[%s;90m%s\e[0m\n" "$style" "$text" ;;
+        *) printf "%s\n" "$text" ;;
     esac
 }
 
@@ -1866,7 +1881,7 @@ install_command() {
     printf "   \033[38;5;15m%-15s\033[0m %s\n" "logs" "📋 View container logs"
     printf "   \033[38;5;15m%-15s\033[0m %s\n" "restart" "🔄 Restart the service"
     if [ "$INSTALL_XRAY" == "true" ]; then
-        printf "   \033[38;5;15m%-15s\033[0m %s\n" "xray_log_out" "📤 View Xray logs"
+        printf "   \033[38;5;15m%-15s\033[0m %s\n" "xray-log-out" "📤 View Xray logs"
     fi
     echo
     
@@ -1961,7 +1976,7 @@ up_command() {
         case "$1" in
             -n|--no-logs) no_logs=true ;;
             -h|--help) help; exit 0 ;;
-            *) echo "Error: Invalid option: $1" >&2; help; exit 0 ;;
+            *) echo "Error: Invalid option: $1" >&2; help; exit 1 ;;
         esac
         shift
     done
@@ -2013,7 +2028,7 @@ restart_command() {
         case "$1" in
             -n|--no-logs) no_logs=true ;;
             -h|--help) help; exit 0 ;;
-            *) echo "Error: Invalid option: $1" >&2; help; exit 0 ;;
+            *) echo "Error: Invalid option: $1" >&2; help; exit 1 ;;
         esac
         shift
     done
@@ -2091,7 +2106,7 @@ logs_command() {
         case "$1" in
             -n|--no-follow) no_follow=true ;;
             -h|--help) help; exit 0 ;;
-            *) echo "Error: Invalid option: $1" >&2; help; exit 0 ;;
+            *) echo "Error: Invalid option: $1" >&2; help; exit 1 ;;
         esac
         shift
     done
@@ -3231,7 +3246,7 @@ update_command() {
         echo -e "\033[38;5;250m   RemnaNode: \033[38;5;15mv${node_version}\033[0m"
         echo -e "\033[38;5;250m   Image ID:  \033[38;5;8m${final_image_id:-N/A}\033[0m"
         echo -e "\033[38;5;250m   Created:   \033[38;5;15m${final_created:-N/A}\033[0m"
-        echo -e "\033[38;5;250m   Script:    \033[38;5;15mv$current_script_version\033[0m"
+        echo -e "\033[38;5;250m   Script:    \033[38;5;15mv$SCRIPT_VERSION\033[0m"
         
         if [ "$was_running" = true ]; then
             echo -e "\033[38;5;250m   Status:    \033[1;32mRunning\033[0m"
@@ -3250,7 +3265,7 @@ update_command() {
         echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 40))\033[0m"
         echo -e "\033[1;37m📊 Current Status:\033[0m"
         
-        echo -e "\033[38;5;250m   Script:    \033[38;5;15mv$current_script_version\033[0m"
+        echo -e "\033[38;5;250m   Script:    \033[38;5;15mv$SCRIPT_VERSION\033[0m"
         
         if is_remnanode_up; then
             echo -e "\033[38;5;250m   Container: \033[1;32mRunning ✅\033[0m"
@@ -4676,6 +4691,10 @@ usage() {
 }
 
 # Функция для версии
+show_command_help() {
+    usage
+}
+
 show_version() {
     echo -e "\033[1;37m🚀 RemnaNode Management CLI\033[0m"
     echo -e "\033[38;5;8m$(printf '─%.0s' $(seq 1 40))\033[0m"
@@ -4968,13 +4987,13 @@ case "${COMMAND:-menu}" in
     install-script) install_script_command ;;
     uninstall) uninstall_command ;;
     uninstall-script) uninstall_script_command ;;
-    up) up_command ;;
+    up) up_command "$@" ;;
     down) down_command ;;
-    restart) restart_command ;;
+    restart) restart_command "$@" ;;
     status) status_command ;;
-    logs) logs_command ;;
-    xray-log-out) xray_log_out ;;
-    xray-log-err) xray_log_err ;;
+    logs) logs_command "$@" ;;
+    xray-log-out|xray_log_out) xray_log_out ;;
+    xray-log-err|xray_log_err) xray_log_err ;;
     update) update_command ;;
     core-update) update_core_command ;;
     migrate) migrate_env_variables; migrate_deprecated_ports; migrate_cap_add; migrate_log_volumes; audit_compose_file ;;

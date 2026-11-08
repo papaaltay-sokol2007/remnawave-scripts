@@ -106,13 +106,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 
-# Fetch IP address from ipinfo.io API
-NODE_IP=$(curl -s -4 ifconfig.io)
-
-# If the IPv4 retrieval is empty, attempt to retrieve the IPv6 address
-if [ -z "$NODE_IP" ]; then
-    NODE_IP=$(curl -s -6 ifconfig.io)
-fi
+# Lazy public IP resolution with strict timeouts and fallbacks (avoids hanging CLI startup)
+NODE_IP=""
+get_node_ip() {
+    if [ -n "$NODE_IP" ]; then
+        printf '%s' "$NODE_IP"
+        return 0
+    fi
+    local url
+    for url in "https://ifconfig.io" "https://icanhazip.com" "https://api.ipify.org"; do
+        NODE_IP=$(curl -fsS -4 --connect-timeout 2 --max-time 4 "$url" 2>/dev/null | tr -d '[:space:]')
+        [ -n "$NODE_IP" ] && break
+    done
+    if [ -z "$NODE_IP" ]; then
+        for url in "https://ifconfig.io" "https://icanhazip.com" "https://api64.ipify.org"; do
+            NODE_IP=$(curl -fsS -6 --connect-timeout 2 --max-time 4 "$url" 2>/dev/null | tr -d '[:space:]')
+            [ -n "$NODE_IP" ] && break
+        done
+    fi
+    printf '%s' "${NODE_IP:-127.0.0.1}"
+}
 
 # Set default app name if not provided
 if [[ "$COMMAND" == "install" || "$COMMAND" == "install-script" ]] && [ -z "$APP_NAME" ]; then
@@ -135,6 +148,8 @@ BACKUP_CONFIG_FILE="$APP_DIR/backup-config.json"
 BACKUP_SCRIPT_FILE="$APP_DIR/backup-scheduler.sh"
 BACKUP_LOG_FILE="$APP_DIR/logs/backup.log"
 LANG_CONFIG_FILE="$APP_DIR/.menu-lang"
+CADDY_DIR="/opt/caddy-remnawave"
+CADDY_VERSION="2.11.4"
 
 # ===== LOCALIZATION SYSTEM =====
 
@@ -1846,18 +1861,20 @@ prompt_backup_script_update() {
 
 
 colorized_echo() {
-    local color=$1
-    local text=$2
-    local style=${3:-0}  # Default style is normal
+    local color="$1"
+    local text="$2"
+    local style="${3:-0}"  # Default style is normal
 
-    case $color in
-        "red") printf "\e[${style};91m${text}\e[0m\n" ;;
-        "green") printf "\e[${style};92m${text}\e[0m\n" ;;
-        "yellow") printf "\e[${style};93m${text}\e[0m\n" ;;
-        "blue") printf "\e[${style};94m${text}\e[0m\n" ;;
-        "magenta") printf "\e[${style};95m${text}\e[0m\n" ;;
-        "cyan") printf "\e[${style};96m${text}\e[0m\n" ;;
-        *) echo "${text}" ;;
+    case "$color" in
+        "red")     printf '\e[%s;91m%s\e[0m\n' "$style" "$text" ;;
+        "green")   printf '\e[%s;92m%s\e[0m\n' "$style" "$text" ;;
+        "yellow")  printf '\e[%s;93m%s\e[0m\n' "$style" "$text" ;;
+        "blue")    printf '\e[%s;94m%s\e[0m\n' "$style" "$text" ;;
+        "magenta") printf '\e[%s;95m%s\e[0m\n' "$style" "$text" ;;
+        "cyan")    printf '\e[%s;96m%s\e[0m\n' "$style" "$text" ;;
+        "white")   printf '\e[1;37m%s\e[0m\n' "$text" ;;
+        "gray")    printf '\e[38;5;244m%s\e[0m\n' "$text" ;;
+        *)         printf '%s\n' "$text" ;;
     esac
 }
 
@@ -4758,8 +4775,8 @@ if [ "$INCLUDE_CONFIGS" = true ]; then
             if [ "$panel_version" != "unknown" ] && [ -n "$panel_version" ]; then
                 log_message "Pinning panel version to $panel_version in docker-compose.yml"
                 
-                # Создаем временный файл с подмененной версией
-                sed "s|image: remnawave/backend[:|$].*|image: remnawave/backend:$panel_version|g" \
+                # Создаем временный файл с подмененной версией (с сохранением ghcr.io и кавычек)
+                sed -E "s|(image:[[:space:]]*['\"]?(ghcr\.io/)?remnawave/backend):[^'\"[:space:]]+|\1:$panel_version|g" \
                     "$temp_backup_dir/docker-compose.yml" > "$temp_backup_dir/docker-compose.yml.tmp"
                 
                 # Проверяем что подмена прошла успешно
@@ -5365,7 +5382,7 @@ cat > "$metadata_file" <<METADATA_EOF
     "app_name": "$APP_NAME",
     "timestamp": "$timestamp",
     "date_created": "$(date -Iseconds)",
-    "script_version": "$(grep '^SCRIPT_VERSION=' "$script_source" | cut -d'=' -f2 | tr -d '"' || echo 'unknown')",
+    "script_version": "$([ -n "${script_source:-}" ] && [ -f "$script_source" ] && grep '^SCRIPT_VERSION=' "$script_source" 2>/dev/null | head -1 | cut -d'=' -f2 | tr -d '"' || echo 'unknown')",
     "backup_script_version": "$BACKUP_SCRIPT_VERSION",
     "panel_version": "$panel_version",
     "database_included": true,
@@ -6639,7 +6656,7 @@ restore_from_backup() {
     # Показываем URL доступа если возможно
     if [ -f "$target_dir/.env" ] && [ "$database_only" = false ]; then
         local app_port=$(grep "^APP_PORT=" "$target_dir/.env" | cut -d'=' -f2 2>/dev/null)
-        local server_ip="${NODE_IP:-127.0.0.1}"
+        local server_ip="$(get_node_ip)"
         
         echo
         echo -e "\033[1;37m🌐 Panel Access:\033[0m"
@@ -8117,7 +8134,7 @@ schedule_run_backup() {
     echo -e "\033[38;5;250m   Location: $APP_DIR/backups/\033[0m"
     echo -e "\033[38;5;250m   Logs: $BACKUP_LOG_FILE\033[0m"
     
-    local latest_backup=$(ls -t "$APP_DIR/backups"/remnawave_scheduled_*.{tar.gz,sql} 2>/dev/null | head -1)
+    local latest_backup=$(ls -1td "$APP_DIR/backups"/remnawave_scheduled_* 2>/dev/null | head -1)
     if [ -n "$latest_backup" ]; then
         local backup_size=$(du -sh "$latest_backup" | cut -f1)
         echo -e "\033[38;5;250m   Latest: $(basename "$latest_backup") ($backup_size)\033[0m"
@@ -8287,7 +8304,7 @@ schedule_cleanup() {
         local deleted_count=0
         local failed_count=0
         
-        echo "$old_files" | while IFS= read -r file; do
+        while IFS= read -r file; do
             if [ -f "$file" ]; then
                 local filename=$(basename "$file")
                 if rm -f "$file" 2>/dev/null; then
@@ -8298,7 +8315,7 @@ schedule_cleanup() {
                     failed_count=$((failed_count + 1))
                 fi
             fi
-        done
+        done <<< "$old_files"
         
         echo
         if [ $failed_count -eq 0 ]; then
@@ -8323,9 +8340,11 @@ schedule_reset_config() {
     read -p "Reset all backup configuration to defaults? [y/N]: " confirm
     
     if [[ $confirm =~ ^[Yy]$ ]]; then
-        cat > "$BACKUP_CONFIG_FILE" << 'EOF'
+        cat > "$BACKUP_CONFIG_FILE" << EOF
 {
+  "app_name": "$APP_NAME",
   "schedule": "0 2 * * *",
+  "backup_type": "sql_dump",
   "compression": {
     "enabled": true,
     "level": 6
@@ -8334,6 +8353,7 @@ schedule_reset_config() {
     "days": 7,
     "min_backups": 3
   },
+  "include_reverse_proxy": true,
   "telegram": {
     "enabled": false,
     "bot_token": null,
@@ -8467,7 +8487,7 @@ validate_prefix() {
 # Validate domain DNS configuration
 validate_domain_dns() {
     local domain="$1"
-    local server_ip="${NODE_IP:-127.0.0.1}"
+    local server_ip="$(get_node_ip)"
     local is_optional="${2:-false}"  # If true, skip validation for wildcard domains
     
     # Skip for wildcard domain
@@ -9033,7 +9053,7 @@ install_caddy_reverse_proxy() {
         cat > "$CADDY_DIR/.env" << EOF
 # Caddy Reverse Proxy for Remnawave
 # Generated on $(date)
-# Server IP: ${NODE_IP:-127.0.0.1}
+# Server IP: $(get_node_ip)
 # Mode: $([ "$secure_mode" = "true" ] && echo "Secure (with Caddy Security)" || echo "Simple")
 
 PANEL_DOMAIN=$panel_domain
@@ -10668,8 +10688,9 @@ caddy_menu() {
         
         # Show domains
         if [ -f "$CADDY_DIR/.env" ]; then
-            local panel_domain=$(grep "^REMNAWAVE_PANEL_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-            local sub_domain=$(grep "^REMNAWAVE_SUB_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+            local panel_domain=$(grep "^PANEL_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | head -1 | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+            [ -z "$panel_domain" ] && panel_domain=$(grep "^REMNAWAVE_PANEL_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | head -1 | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+            local sub_domain=$(grep "^SUB_DOMAIN=" "$CADDY_DIR/.env" 2>/dev/null | head -1 | cut -d'=' -f2 | tr -d '"' | tr -d "'")
             if [ -n "$panel_domain" ]; then
                 echo -e "   \033[38;5;15m$(L CADDY_PANEL):\033[0m          \033[38;5;117mhttps://$panel_domain\033[0m"
             fi
@@ -11745,7 +11766,7 @@ API_INSTANCES=1
 
 ### DATABASE ###
 # FORMAT: postgresql://{user}:{password}@{host}:{port}/{database}
-DATABASE_URL="postgresql://postgres:postgres@remnawave-db:5432/postgres"
+DATABASE_URL="postgresql://postgres:postgres@${APP_NAME}-db:5432/postgres"
 
 ### REDIS ###
 REDIS_SOCKET=/var/run/valkey/valkey.sock
@@ -11955,7 +11976,7 @@ services:
             - POSTGRES_DB=\${POSTGRES_DB}
             - TZ=UTC
         ports:
-            - '127.0.0.1:6767:5432'
+            - '127.0.0.1:${DB_PORT}:5432'
         volumes:
             - ${APP_NAME}-db-data:/var/lib/postgresql
         healthcheck:
@@ -12220,6 +12241,12 @@ backup_command() {
     # Парсинг аргументов
     while [[ "$#" -gt 0 ]]; do
         case "$1" in
+            --compress|-c)
+                # Enabled by default; accepted for CLI backward compatibility
+                ;;
+            --include-configs)
+                # Enabled by default; accepted for CLI backward compatibility
+                ;;
             --no-compress) 
                 backup_args+=("--no-compress")
                 ;;
@@ -12928,9 +12955,12 @@ uninstall_command() {
         fi
     fi
     
-    # Create safety backup before uninstall
+    # Create safety backup before uninstall (in unified restore-compatible layout)
     local backup_timestamp=$(date +%Y%m%d_%H%M%S)
-    local backup_dir="$HOME/remnawave-backup-before-uninstall-$backup_timestamp"
+    local backup_root_dir
+    backup_root_dir=$(mktemp -d "${TMPDIR:-/tmp}/remnawave-uninstall-bkp.XXXXXX")
+    local backup_inner_name="remnawave_uninstall_${backup_timestamp}"
+    local backup_dir="$backup_root_dir/$backup_inner_name"
     
     echo
     colorized_echo cyan "==================================================="
@@ -12940,17 +12970,23 @@ uninstall_command() {
     
     mkdir -p "$backup_dir"
     
-    # Backup main panel directory
+    # Backup main panel directory contents into unified root
     if [ -d "$APP_DIR" ]; then
         colorized_echo blue "📦 Backing up panel directory: $APP_DIR"
-        cp -r "$APP_DIR" "$backup_dir/panel/" 2>/dev/null || true
+        if command -v rsync >/dev/null 2>&1; then
+            rsync -a --exclude='backups/' --exclude='logs/' --exclude='temp/' "$APP_DIR/" "$backup_dir/" 2>/dev/null || true
+        else
+            cp -a "$APP_DIR"/. "$backup_dir/" 2>/dev/null || true
+            rm -rf "$backup_dir/backups" "$backup_dir/logs" "$backup_dir/temp" 2>/dev/null || true
+        fi
         colorized_echo green "   ✅ Panel directory backed up"
     fi
     
     # Backup Caddy directory if exists
     if [ -d "$CADDY_DIR" ]; then
         colorized_echo blue "📦 Backing up Caddy directory: $CADDY_DIR"
-        cp -r "$CADDY_DIR" "$backup_dir/caddy/" 2>/dev/null || true
+        mkdir -p "$backup_dir/caddy"
+        cp -a "$CADDY_DIR"/. "$backup_dir/caddy/" 2>/dev/null || true
         colorized_echo green "   ✅ Caddy directory backed up"
     fi
     
@@ -12961,25 +12997,27 @@ uninstall_command() {
         local db_backup_file="$backup_dir/database.sql"
         
         # Get DB credentials from .env
-        local db_user=$(grep "^POSTGRES_USER=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-        local db_pass=$(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-        local db_name=$(grep "^POSTGRES_DB=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+        local db_user=$(grep "^POSTGRES_USER=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        local db_pass=$(grep "^POSTGRES_PASSWORD=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        local db_name=$(grep "^POSTGRES_DB=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        db_user="${db_user:-postgres}"
+        db_pass="${db_pass:-postgres}"
+        db_name="${db_name:-postgres}"
         
-        if [ -n "$db_user" ] && [ -n "$db_pass" ] && [ -n "$db_name" ]; then
-            if docker exec -e PGPASSWORD="$db_pass" "${APP_NAME}-db" pg_dump -U "$db_user" -d "$db_name" > "$db_backup_file" 2>/dev/null; then
-                gzip "$db_backup_file" 2>/dev/null || true
-                colorized_echo green "   ✅ Database exported to database.sql.gz"
-            else
-                colorized_echo yellow "   ⚠️  Could not export database (container may not be ready)"
-            fi
+        if docker exec -e PGPASSWORD="$db_pass" "${APP_NAME}-db" pg_dump -U "$db_user" -d "$db_name" --clean --if-exists > "$db_backup_file" 2>/dev/null; then
+            gzip -f "$db_backup_file" 2>/dev/null || true
+            colorized_echo green "   ✅ Database exported to database.sql.gz"
+        else
+            rm -f "$db_backup_file" 2>/dev/null || true
+            colorized_echo yellow "   ⚠️  Could not export database (container may not be ready)"
         fi
     fi
     
-    # Create final archive
+    # Create final archive with top-level folder so restore_full_from_archive recognizes it
     colorized_echo blue "📦 Creating compressed archive..."
     local final_archive="$HOME/remnawave-backup-$backup_timestamp.tar.gz"
-    tar -czf "$final_archive" -C "$backup_dir" . 2>/dev/null
-    rm -rf "$backup_dir"
+    tar -czf "$final_archive" -C "$backup_root_dir" "$backup_inner_name" 2>/dev/null
+    rm -rf "$backup_root_dir"
     
     echo
     colorized_echo green "==================================================="
@@ -13623,7 +13661,7 @@ install_caddy_for_standalone_subpage() {
         cat > "$CADDY_DIR/.env" << EOF
 # Caddy Reverse Proxy for Standalone Subscription-Page
 # Generated on $(date)
-# Server IP: ${NODE_IP:-127.0.0.1}
+# Server IP: $(get_node_ip)
 
 SUB_DOMAIN=$sub_domain
 SUB_PORT=$sub_port
@@ -14236,7 +14274,7 @@ status_command() {
         fi
         
         # IP адрес
-        local server_ip="${NODE_IP:-127.0.0.1}"
+        local server_ip="$(get_node_ip)"
         
         # URL подключения
         if [ -n "$app_port" ]; then
@@ -14914,6 +14952,7 @@ upgrade_postgres_command() {
     # --- Step 4: switch compose to pg18 and recreate the volume ---------------
     echo -e "\033[38;5;250m📝 Step 4:\033[0m Switching to $PG_TARGET_IMAGE and recreating the volume..."
     rewrite_compose_for_pg18 "$COMPOSE_FILE" "$APP_NAME"
+    mf_has_marker "$COMPOSE_FILE" && mf_stamp "$COMPOSE_FILE"
 
     if ! docker volume rm "$volume_name" >/dev/null 2>&1; then
         echo -e "\033[1;31m❌ Could not remove volume '$volume_name'\033[0m"
@@ -14952,7 +14991,7 @@ upgrade_postgres_command() {
 
     local table_count
     table_count=$(docker exec -e PGPASSWORD="$pg_pass" "$db_container" \
-        psql -U "$pg_user" -d postgres -t -c \
+        psql -U "$pg_user" -d "$pg_db" -t -c \
         "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null | tr -d ' ')
 
     if [ -z "$table_count" ] || [ "$table_count" -lt 5 ] 2>/dev/null; then

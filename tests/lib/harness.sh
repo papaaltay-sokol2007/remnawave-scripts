@@ -46,8 +46,24 @@ load_blocks() {
 
 # --- sandbox -----------------------------------------------------------------
 
+make_exec_sandbox() {
+    local dir
+    dir="$(mktemp -d)"
+    local probe="$dir/.exec_probe"
+    printf '#!/bin/sh\nexit 0\n' > "$probe"
+    chmod +x "$probe" 2>/dev/null || true
+    if ! "$probe" >/dev/null 2>&1; then
+        rm -rf "$dir"
+        mkdir -p "$REPO_ROOT/tests/.tmp"
+        dir="$(mktemp -d "$REPO_ROOT/tests/.tmp/sandbox.XXXXXX")"
+    else
+        rm -f "$probe"
+    fi
+    echo "$dir"
+}
+
 setup_sandbox() {
-    SANDBOX="$(mktemp -d)"
+    SANDBOX="$(make_exec_sandbox)"
     CADDY_DIR="$SANDBOX/caddy"
     mkdir -p "$CADDY_DIR" "$SANDBOX/bin"
     DOCKER_LOG="$SANDBOX/docker.log"
@@ -67,6 +83,7 @@ setup_sandbox() {
 
 teardown_sandbox() {
     [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ] && rm -rf "$SANDBOX"
+    rmdir "$REPO_ROOT/tests/.tmp" 2>/dev/null || true
 }
 
 install_stubs() {

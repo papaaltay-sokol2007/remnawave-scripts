@@ -296,7 +296,7 @@ is_netbird_installed() {
 }
 
 get_installed_version() {
-    netbird version 2>/dev/null | head -n1 | tr -d '[:space:]' || echo ""
+    netbird version 2>/dev/null | sed -n '1p' | tr -d '[:space:]' || echo ""
 }
 
 # Последняя версия с GitHub API (best-effort, не критично при ошибке)
@@ -325,11 +325,11 @@ is_netbird_connected() {
 # NetBird IP локального пира (устойчиво к смене формата вывода)
 get_netbird_ip() {
     local ip=""
-    # Современные версии: только IPv4 одним значением
-    ip=$(netbird status --ipv4 2>/dev/null | head -n1 | tr -d '[:space:]') || ip=""
+    # Современные версии: только IPv4 одним значением (без head -n1 во избежание SIGPIPE под pipefail)
+    ip=$(netbird status --ipv4 2>/dev/null | sed -n '1p' | tr -d '[:space:]') || ip=""
     if [[ -z "$ip" || ! "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
         # Fallback: парсинг полного статуса
-        ip=$(get_status_output | sed -n 's/^NetBird IP:[[:space:]]*//p' | head -n1)
+        ip=$(get_status_output | sed -n 's/^NetBird IP:[[:space:]]*//p' | sed -n '1p')
         ip="${ip%%/*}"
         ip="${ip//[[:space:]]/}"
     fi
@@ -417,7 +417,7 @@ check_firewall() {
     port=$(effective_firewall_port)
 
     if command -v ufw &>/dev/null; then
-        if ufw status 2>/dev/null | head -n1 | grep -q "active"; then
+        if ufw status 2>/dev/null | sed -n '1p' | grep -q "active"; then
             print_info "UFW активен, проверяю порт $port/udp..."
             ensure_firewall_port "ufw" "$port"
         else

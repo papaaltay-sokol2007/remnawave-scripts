@@ -10,6 +10,7 @@
 # VERSION=2.11.1
 
 SCRIPT_VERSION="2.11.1"
+SCRIPT_ORIGINAL_ARGS=("$@")
 
 # Handle @ prefix for consistency with other scripts
 if [ $# -gt 0 ] && [ "$1" = "@" ]; then
@@ -18,30 +19,20 @@ fi
 
 # Debug mode - set via --debug flag
 DEBUG_MODE=false
-SCRIPT_URL="https://raw.githubusercontent.com/dignezzz/remnawave-scripts/main/selfsteal.sh"
+SCRIPT_REPO="DigneZzZ/remnawave-scripts"
+SCRIPT_REF="main"
+SCRIPT_FILE="selfsteal.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/${SCRIPT_REPO}/${SCRIPT_REF}/${SCRIPT_FILE}"
 UPDATE_URL="$SCRIPT_URL"
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --debug)
-            DEBUG_MODE=true
-            echo "🔧 DEBUG MODE ENABLED"
-            shift
-        ;;
-        --source)
-           if [[ -n "$2" && "$2" =~ selfsteal\.sh$ ]]; then
-               SCRIPT_URL="$2"
-               shift 2
-           else
-               echo "Error: --source parameter must be a URL to a selfsteal.sh file."
-               exit 1
-           fi
-        ;;
-        *)
-            break
-        ;;
-    esac
+for _arg in "$@"; do
+    if [ "$_arg" = "--debug" ]; then
+        DEBUG_MODE=true
+        echo "🔧 DEBUG MODE ENABLED"
+        break
+    fi
 done
+unset _arg
 
 # Only enable strict mode if not debugging
 if [ "$DEBUG_MODE" = true ]; then
@@ -154,22 +145,22 @@ readonly NC='\033[0m' # No Color
 # Logging functions
 log_info() {
     echo -e "${WHITE}ℹ️  $*${NC}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*" >> "$LOG_FILE" 2>/dev/null || true
+    { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $*" >> "$LOG_FILE"; } 2>/dev/null || true
 }
 
 log_success() {
     echo -e "${GREEN}✅ $*${NC}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] $*" >> "$LOG_FILE" 2>/dev/null || true
+    { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] $*" >> "$LOG_FILE"; } 2>/dev/null || true
 }
 
 log_warning() {
     echo -e "${YELLOW}⚠️  $*${NC}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARNING] $*" >> "$LOG_FILE" 2>/dev/null || true
+    { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARNING] $*" >> "$LOG_FILE"; } 2>/dev/null || true
 }
 
 log_error() {
     echo -e "${RED}❌ $*${NC}" >&2
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" >> "$LOG_FILE" 2>/dev/null || true
+    { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $*" >> "$LOG_FILE"; } 2>/dev/null || true
 }
 
 # Error handler
@@ -1717,8 +1708,9 @@ ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --help|-h)
-            show_help
-            exit 0
+            COMMAND="help"
+            shift
+            break
             ;;
         --version|-v)
             echo "Selfsteal Management Script v$SCRIPT_VERSION"
@@ -1754,6 +1746,16 @@ while [ $# -gt 0 ]; do
         --debug)
             # Already handled at the top of the script
             shift
+            ;;
+        --source)
+            if [ -n "${2:-}" ] && [[ "$2" =~ selfsteal\.sh$ ]]; then
+                SCRIPT_URL="$2"
+                UPDATE_URL="$2"
+                shift 2
+            else
+                echo "Error: --source parameter must be a URL to a selfsteal.sh file."
+                exit 1
+            fi
             ;;
         --tcp)
             # Use TCP port instead of Unix socket (nginx only)
@@ -1928,7 +1930,11 @@ get_server_ip() {
     ip="127.0.0.1"
     echo "${ip:-127.0.0.1}"
 }
-NODE_IP=$(get_server_ip)
+if [[ ! "${COMMAND:-}" =~ ^(help|--help|-h|version|--version|-v)$ ]]; then
+    NODE_IP=$(get_server_ip)
+else
+    NODE_IP="127.0.0.1"
+fi
 
 # Check if running as root
 check_running_as_root() {
@@ -5457,12 +5463,14 @@ update_script() {
         echo -e "${GRAY}💾 Backup created: $backup_file${NC}"
     fi
     
-    # Download new version
-    local temp_file="/tmp/caddy-selfsteal-update-$$.sh"
+    # Download new version safely via mktemp
+    local temp_file
+    temp_file=$(mktemp /tmp/caddy-selfsteal-update-XXXXXX.sh 2>/dev/null || echo "/tmp/caddy-selfsteal-update-$$.sh")
     
-    if curl -fsSL "$UPDATE_URL" -o "$temp_file" 2>/dev/null; then
-        # Verify downloaded file
-        if [ -s "$temp_file" ] && head -1 "$temp_file" | grep -q "#!/"; then
+    if curl -fsSL --connect-timeout 10 --max-time 30 "$UPDATE_URL" -o "$temp_file" 2>/dev/null || \
+       curl -fsSL --connect-timeout 10 --max-time 30 "https://cdn.jsdelivr.net/gh/${SCRIPT_REPO}@${SCRIPT_REF}/${SCRIPT_FILE}" -o "$temp_file" 2>/dev/null; then
+        # Verify downloaded file header and bash syntax
+        if [ -s "$temp_file" ] && head -1 "$temp_file" | grep -q "#!/" && bash -n "$temp_file" 2>/dev/null; then
             # Get new version from downloaded script
             local new_version=$(grep "^SCRIPT_VERSION=" "$temp_file" | cut -d'"' -f2)
             
@@ -5500,7 +5508,11 @@ update_script() {
             read -p "Restart script now? [Y/n]: " -r restart_choice
             if [[ ! $restart_choice =~ ^[Nn]$ ]]; then
                 echo -e "${GRAY}Restarting...${NC}"
-                exec "$0" "$@"
+                local target_bin="$0"
+                if [ -x "/usr/local/bin/$APP_NAME" ]; then
+                    target_bin="/usr/local/bin/$APP_NAME"
+                fi
+                exec "$target_bin" "${SCRIPT_ORIGINAL_ARGS[@]}"
             fi
         else
             echo -e "${RED}❌ Downloaded file appears to be corrupted${NC}"
